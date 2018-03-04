@@ -43,11 +43,8 @@
 #|b|y| |D|a|n|i|e|l| |B|u|s|c|o|m|b|e|
 #+-+-+ +-+-+-+-+-+-+ +-+-+-+-+-+-+-+-+
 #+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-#|d|b|u|s|c|o|m|b|e|@|u|s|g|s|.|g|o|v|
+#|d|a|n|i|e|l|.|b|u|s|c|o|m|b|e|@|n|a|u|.|e|d|u|
 #+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-#+-+-+-+-+ +-+-+-+-+-+-+-+-+-+-+ +-+-+-+-+-+-+
-#|U|.|S|.| |G|e|o|l|o|g|i|c|a|l| |S|u|r|v|e|y|
-#+-+-+-+-+ +-+-+-+-+-+-+-+-+-+-+ +-+-+-+-+-+-+
 
 #"""
 
@@ -56,6 +53,7 @@
 # =========================================================
 
 # operational
+from __future__ import print_function
 import os, time #sys, getopt, 
 from scipy.io import loadmat #, savemat
 from joblib import Parallel, delayed, cpu_count
@@ -73,6 +71,7 @@ import numpy as np
 import PyHum.utils as humutils
 from scipy.signal import convolve2d, medfilt2d
 import PyHum.replace_nans as replace_nans
+from skimage.restoration import denoise_tv_chambolle
 
 # plotting
 import matplotlib.pyplot as plt
@@ -94,7 +93,7 @@ warnings.filterwarnings("ignore")
 
 
 #################################################
-def texture2(humfile, sonpath, win=10, doplot=1,  numclasses=4): 
+def texture2(humfile, sonpath, win, doplot,  numclasses): 
           
       '''
       Create a texture lengthscale map using the algorithm detailed by Buscombe et al. (2015)
@@ -136,38 +135,38 @@ def texture2(humfile, sonpath, win=10, doplot=1,  numclasses=4):
 
       # prompt user to supply file if no input file given
       if not humfile:
-         print 'An input file is required!!!!!!'
+         print('An input file is required!!!!!!')
          Tk().withdraw() # we don't want a full GUI, so keep the root window from appearing
          humfile = askopenfilename(filetypes=[("DAT files","*.DAT")]) 
 
       # prompt user to supply directory if no input sonpath is given
       if not sonpath:
-         print 'A *.SON directory is required!!!!!!'
+         print('A *.SON directory is required!!!!!!')
          Tk().withdraw() # we don't want a full GUI, so keep the root window from appearing
          sonpath = askdirectory() 
 
       # print given arguments to screen and convert data type where necessary
       if humfile:
-         print 'Input file is %s' % (humfile)
+         print('Input file is %s' % (humfile))
          
       if sonpath:
-         print 'Sonar file path is %s' % (sonpath)
+         print('Sonar file path is %s' % (sonpath))
          
       if win:
          win = np.asarray(win,int)
-         print 'Window is %s square pixels' % (str(win))
+         print('Window is %s square pixels' % (str(win)))
                 
       if numclasses:
          numclasses = np.asarray(numclasses,int)
-         print 'Number of sediment classes: %s' % (str(numclasses))
+         print('Number of sediment classes: %s' % (str(numclasses)))
                
       if doplot:
          doplot = int(doplot)
          if doplot==0:
-            print "Plots will not be made"    
+            print("Plots will not be made")
       
       
-      print '[Default] Number of processors is %s' % (str(cpu_count()))
+      print('[Default] Number of processors is %s' % (str(cpu_count())))
                         
       ########################################################
       ########################################################
@@ -196,7 +195,7 @@ def texture2(humfile, sonpath, win=10, doplot=1,  numclasses=4):
       dist_m = np.squeeze(meta['dist_m'])
 
       ### port
-      print "processing port side ..."
+      print("processing port side ...")
       # load memory mapped scan ... port
       shape_port = np.squeeze(meta['shape_port'])
       if shape_port!='':
@@ -209,7 +208,7 @@ def texture2(humfile, sonpath, win=10, doplot=1,  numclasses=4):
          port_fp2 = io.get_mmap_data(sonpath, base, '_data_port_l.dat', 'float32', tuple(shape_port))
 
       ### star
-      print "processing starboard side ..."
+      print("processing starboard side ...")
       # load memory mapped scan ... port
       shape_star = np.squeeze(loadmat(sonpath+base+'meta.mat')['shape_star'])
       if shape_star!='':
@@ -231,14 +230,18 @@ def texture2(humfile, sonpath, win=10, doplot=1,  numclasses=4):
          shape[1] = shape_port[0] + shape_star[0]
 
       # create memory mapped file for Sp
-      with open(os.path.normpath(os.path.join(sonpath,base+'_data_class.dat')), 'w+') as ff:
-         fp = np.memmap(ff, dtype='float32', mode='w+', shape=tuple(shape))
+      #with open(os.path.normpath(os.path.join(sonpath,base+'_data_class.dat')), 'w+') as ff:
+      #   fp = np.memmap(ff, dtype='float32', mode='w+', shape=tuple(shape))
+      fp = np.zeros(tuple(shape), dtype='float32')
 
       if len(shape_star)>2:
 
-         for p in xrange(len(port_fp)):
+         for p in range(len(port_fp)):
             
-            Snn = std_convoluted(np.vstack((np.flipud(port_fp[p]), star_fp[p])), win)[1]
+            merge = np.vstack((np.flipud(port_fp[p]), star_fp[p]))
+            merge = denoise_tv_chambolle(merge.copy(), weight=2, multichannel=False).astype('float32')
+            Snn = std_convoluted(merge, win)[1]
+            del merge
  
             try:
                Snn = medfilt2d(Snn, (win+1,win+1))
@@ -263,13 +266,17 @@ def texture2(humfile, sonpath, win=10, doplot=1,  numclasses=4):
             fp[p] = Sp.astype('float32')
             del Sp
 
-         del fp # flush data to file
-
+         #del fp # flush data to file
+         shape = io.set_mmap_data(sonpath, base, '_data_class.dat', 'float32', np.squeeze(fp))
+         del fp
          class_fp = io.get_mmap_data(sonpath, base, '_data_class.dat', 'float32', tuple(shape))
 
       else: 
 
-            Snn = std_convoluted(np.vstack((np.flipud(port_fp), star_fp)), win)[1]
+            merge = np.vstack((np.flipud(port_fp), star_fp))
+            merge = denoise_tv_chambolle(merge.copy(), weight=2, multichannel=False).astype('float32')
+            Snn = std_convoluted(merge, win)[1]
+            del merge
 
             try:
                Snn = medfilt2d(Snn, (win+1,win+1))
@@ -290,13 +297,16 @@ def texture2(humfile, sonpath, win=10, doplot=1,  numclasses=4):
 
             Sp = (Snn**2) * np.cos(np.deg2rad(R)) / win ##**2
 
-            with open(os.path.normpath(os.path.join(sonpath,base+'_data_class.dat')), 'w+') as ff:
-               np.save(ff, np.squeeze(Sp).astype('float32'))
+            shape = io.set_mmap_data(sonpath, base, '_data_class.dat', 'float32', np.squeeze(Sp))
 
-            with open(os.path.normpath(os.path.join(sonpath,base+'_data_class.dat')), 'r') as ff:
-               class_fp = np.load(ff)
+            #with open(os.path.normpath(os.path.join(sonpath,base+'_data_class.dat')), 'w+') as ff:
+            #   np.save(ff, np.squeeze(Sp).astype('float32'))
 
-            del Sp
+            #with open(os.path.normpath(os.path.join(sonpath,base+'_data_class.dat')), 'r') as ff:
+            #   class_fp = np.load(ff)
+
+            #del Sp
+            class_fp = io.get_mmap_data(sonpath, base, '_data_class.dat', 'float32', tuple(shape))
 
       dist_m = np.squeeze(loadmat(sonpath+base+'meta.mat')['dist_m'])
 
@@ -304,16 +314,16 @@ def texture2(humfile, sonpath, win=10, doplot=1,  numclasses=4):
       if doplot==1:
 
          if len(shape_star)>2:
-            for p in xrange(len(star_fp)):
+            for p in range(len(star_fp)):
                plot_class(dist_m, shape_port, port_fp[p], star_fp[p], class_fp[p], ft, humfile, sonpath, base, p)
          else:
             plot_class(dist_m, shape_port, port_fp, star_fp, class_fp, ft, humfile, sonpath, base, 0)
 
          if len(shape_star)>2:
-            for p in xrange(len(star_fp)):
+            for p in range(len(star_fp)):
                plot_contours(dist_m, shape_port, class_fp[p], ft, humfile, sonpath, base, numclasses, p)
          else:
-            plot_contours(dist_m, shape_port, class_fp, ft, humfile, sonpath, base, numclasses, 0)
+            plot_contours(dist_m, shape_port, port_fp, star_fp,class_fp, ft, humfile, sonpath, base, numclasses, 0)
         
 
       #######################################################
@@ -323,7 +333,7 @@ def texture2(humfile, sonpath, win=10, doplot=1,  numclasses=4):
          with open(os.path.normpath(os.path.join(sonpath,base+'_data_kclass.dat')), 'w+') as ff:
             fp = np.memmap(ff, dtype='float32', mode='w+', shape=tuple(shape))
 
-         for p in xrange(len(port_fp)):
+         for p in range(len(port_fp)):
             wc = get_kclass(class_fp[p].copy(), numclasses)
             fp[p] = wc.astype('float32')
             del wc
@@ -347,7 +357,7 @@ def texture2(humfile, sonpath, win=10, doplot=1,  numclasses=4):
       if doplot==1:
 
          if len(shape_star)>2:
-            for p in xrange(len(star_fp)):
+            for p in range(len(star_fp)):
                plot_kmeans(dist_m, shape_port, port_fp[p], star_fp[p], kclass_fp[p], ft, humfile, sonpath, base, p)
          else:
             plot_kmeans(dist_m, shape_port, port_fp, star_fp, kclass_fp, ft, humfile, sonpath, base, 0)         
@@ -356,9 +366,10 @@ def texture2(humfile, sonpath, win=10, doplot=1,  numclasses=4):
          elapsed = (time.time() - start)
       else: # windows
          elapsed = (time.clock() - start)
-      print "Processing took ", elapsed , "seconds to analyse"
+      print("Processing took " +str(elapsed)+ "seconds to analyse")
 
-      print "Done!"
+      print("Done!")
+      print("===================================================")
             
 # =========================================================
 def get_kclass(Sk, numclasses):   
@@ -384,13 +395,14 @@ def plot_class(dist_m, shape_port, dat_port, dat_star, dat_class, ft, humfile, s
       Zdist = dist_m
       extent = shape_port[0]
 
-   print "Plotting ... "
+   print("Plotting ... ")
    # create fig 1
    fig = plt.figure()
    fig.subplots_adjust(wspace = 0, hspace=0.075)
    plt.subplot(2,1,1)
    ax = plt.gca()
-   im = ax.imshow(np.vstack((np.flipud(dat_port),dat_star)) ,cmap='gray',extent=[min(Zdist), max(Zdist), -extent*(1/ft), extent*(1/ft)],origin='upper')
+   im = ax.imshow(np.vstack((np.flipud(dat_port),dat_star)),cmap='gray',
+                  extent=[min(Zdist), max(Zdist), -extent*(1/ft), extent*(1/ft)],origin='upper')
    plt.ylabel('Horizontal distance (m)'); 
    plt.axis('tight')
 
@@ -409,8 +421,10 @@ def plot_class(dist_m, shape_port, dat_port, dat_star, dat_class, ft, humfile, s
 
    plt.subplot(2,1,2)
    ax = plt.gca()
-   plt.imshow(np.vstack((np.flipud(dat_port), dat_star)),cmap='gray',extent=[min(Zdist), max(Zdist), -extent*(1/ft), extent*(1/ft)],origin='upper')
-   im = ax.imshow(dat_class, alpha=0.5,extent=[min(Zdist), max(Zdist), -extent*(1/ft), extent*(1/ft)],origin='upper', cmap='YlOrRd')#, vmin=0.5, vmax=3)
+   plt.imshow(np.vstack((np.flipud(dat_port), dat_star)),cmap='gray',
+              extent=[min(Zdist), max(Zdist), -extent*(1/ft), extent*(1/ft)],origin='upper')
+   im = ax.imshow(dat_class, alpha=0.5,extent=[min(Zdist), max(Zdist), -extent*(1/ft), extent*(1/ft)],
+                  origin='upper', cmap='YlOrRd', vmin=0, vmax=3)
    plt.ylabel('Horizontal distance (m)'); 
    plt.xlabel('Distance along track (m)')
    plt.axis('tight')
@@ -429,7 +443,7 @@ def plot_class(dist_m, shape_port, dat_port, dat_star, dat_class, ft, humfile, s
    del fig
 
 # =========================================================
-def plot_contours(dist_m, shape_port, dat_class, ft, humfile, sonpath, base, numclasses, p):
+def plot_contours(dist_m, shape_port, dat_port, dat_star, dat_class, ft, humfile, sonpath, base, numclasses, p):
 
    if len(shape_port)>2:
       Zdist = dist_m[shape_port[-1]*p:shape_port[-1]*(p+1)]
@@ -438,12 +452,15 @@ def plot_contours(dist_m, shape_port, dat_class, ft, humfile, sonpath, base, num
       Zdist = dist_m
       extent = shape_port[0]
 
-   levels = np.linspace(np.nanmin(dat_class),np.nanmax(dat_class),numclasses+1)
+   levels = np.linspace(np.nanmin(dat_class)+.25, np.nanmax(dat_class)-0.5,numclasses+1)
 
    fig = plt.figure()
    plt.subplot(2,1,1)
    ax = plt.gca()
-   CS = plt.contourf(dat_class.astype('float64'), levels, extent=[min(Zdist), max(Zdist), -extent*(1/ft), extent*(1/ft)], cmap='YlOrRd',origin='upper')#vmin=0.5, vmax=3)
+   plt.imshow(np.vstack((np.flipud(dat_port), dat_star)),cmap='gray',
+              extent=[min(Zdist), max(Zdist), -extent*(1/ft), extent*(1/ft)],origin='upper')
+   CS = plt.contourf(np.flipud(dat_class).astype('float64'), levels, extent=[min(Zdist), max(Zdist), -extent*(1/ft), extent*(1/ft)], 
+                     cmap='YlOrRd',origin='upper', alpha=0.5)#, vmin=0.5, vmax=np.mean(dat_class))
    plt.ylabel('Horizontal distance (m)'); plt.xlabel('Distance along track (m)')
    plt.axis('tight')
 
@@ -475,7 +492,8 @@ def plot_kmeans(dist_m, shape_port, dat_port, dat_star, dat_kclass, ft, humfile,
    ax = plt.gca()
    plt.imshow(np.vstack((np.flipud(dat_port), dat_star)), cmap='gray',extent=[min(Zdist), max(Zdist), -extent*(1/ft), extent*(1/ft)],origin='upper')
    
-   CS = plt.contourf(np.flipud(dat_kclass), alpha=0.4, extent=[min(Zdist), max(Zdist), -extent*(1/ft), extent*(1/ft)],origin='upper', cmap='YlOrRd')#, levels, vmin=0.5, vmax=3)   
+   CS = plt.contourf(np.flipud(dat_kclass), alpha=0.4, extent=[min(Zdist), max(Zdist), -extent*(1/ft), extent*(1/ft)],
+                     origin='upper', cmap='YlOrRd', vmin=0, vmax=3)   
    plt.ylabel('Horizontal distance (m)')
    plt.xlabel('Distance along track (m)')
    plt.axis('tight')

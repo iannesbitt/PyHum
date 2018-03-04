@@ -1,17 +1,16 @@
-# cython module for reading binary humminbird files
-# Daniel Buscombe, June 2014 - Feb 2015
+# cython: boundscheck=False
+# cython: cdivision=True
+# cython: wraparound=False
+# cython: nonecheck=False
 """
 Part of PyHum software 
 
 INFO:
 
-
 Author:    Daniel Buscombe
-           Grand Canyon Monitoring and Research Center
-           United States Geological Survey
-           Flagstaff, AZ 86001
-           dbuscombe@usgs.gov
-Version: 1.2.3      Revision: Apr, 2015
+           Northern Arizona University
+           Flagstaff, AZ 86011
+           daniel.buscombe@nau.edu
 
 For latest code version please visit:
 https://github.com/dbuscombe-usgs
@@ -21,16 +20,18 @@ This software is in the public domain because it contains materials that origina
 For more information, see the official USGS copyright policy at 
 http://www.usgs.gov/visual-id/credit_usgs.html#copyright
 """
-
 from __future__ import generators
 from __future__ import division
+
 import numpy as np
 cimport numpy as np
-from libc.math cimport tan, atan, exp
+from libc.math cimport tan, atan, exp, sin, cos
 
 from array import array as arr
 import pyproj
 import os, struct
+
+import PyHum.utils as humutils
 
 # =========================================================
 cdef class pyread:
@@ -43,7 +44,7 @@ cdef class pyread:
     cdef object humdat
     
     # =========================================================
-    def __init__(self, list sonfiles, str humfile, float c, int headbytes=67, str cs2cs_args1="epsg:26949"):
+    def __init__(self, list sonfiles, str humfile, float c, int model=998, str cs2cs_args1="epsg:26949"):
        """
        PyRead
 
@@ -52,12 +53,18 @@ cdef class pyread:
        cs2cs_args1: blah blah blah
        """
 
-       trans =  pyproj.Proj(init=cs2cs_args1)
+       if model==798:
+          headbytes=72
+       elif model==1199:
+          headbytes=68
+       else: #tested so far 998, 1198
+          headbytes=67
 
-       # world mercator
-       #cdef str cs2cs_args2 = '+proj=merc +lon_0=0 +k=1 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs +proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs'
-       #transWGS84 =  pyproj.Proj(cs2cs_args2)
-       
+       try:
+          trans =  pyproj.Proj(init=cs2cs_args1)
+       except:
+          trans =  pyproj.Proj(cs2cs_args1.lstrip(), inverse=True)       
+
        fid2 = open(humfile,'rb')
        humdat = self._decode_humdat(fid2, trans) #, transWGS84)
        self.humdat = humdat
@@ -71,35 +78,63 @@ cdef class pyread:
        cdef list tmpdata = [] 
               
        for sonfile in sonfiles:
-          fid = open(sonfile,'rb')
-          dat = self._fread(fid,os.path.getsize(sonfile), 'c')
-          fid.close()
 
-          # unpack into integers
-          for i from 0 <= i < len(dat):
-             int_list.append(struct.unpack('>B', dat[i])[0])
-          dat = [] 
+          try: #faster to use the idx file, if it exists
+             idxfile = sonfile.split('.SON')[0]+'.IDX'
+             idxfid = open(idxfile,'rb')
+             result = None
+             while result is None:
+               try:
+                 spacer = self._fread(idxfid, 4, 'B')
+                 dfbreak.append(struct.unpack('>i', ''.join(self._fread(idxfid,4,'c')) )[0])
+               except:
+                 result = 1
+             idxfid.close()
+             dfbreak = np.diff(dfbreak).tolist()
 
-          # find the start sequences in the list of integers
-          for s in self._KnuthMorrisPratt(int_list, [192,222,171,33,128]): 
-             fbreak.append(s)
-          int_list = [] 
+             fid = open(sonfile,'rb')
+             for i from 0 <= i < len(dfbreak):       
+                tmpdata.append(self._gethead(fid,trans,c, model, humdat['linesize']))
+                ints_list = []
+                for j from 0 <= j < dfbreak[i]-headbytes:                 
+                   ints_list.append(struct.unpack('>B', ''.join(self._fread(fid,1,'c')) )[0])
+                tmpdata.append(ints_list) # grab the sonar data     
+             dfbreak = [] 
+             data.append(tmpdata)  
+             tmpdata = []   
+     
+             fid.close()
+
+          except: #if idx is absent, or empty, or if son files are corrupted
+             fid = open(sonfile,'rb')
+             dat = self._fread(fid,os.path.getsize(sonfile), 'c')
+             fid.close()
+
+             # unpack into integers
+             for i from 0 <= i < len(dat):
+                int_list.append(struct.unpack('>B', dat[i])[0])
+             dat = [] 
+
+             # find the start sequences in the list of integers
+             for s in self._KnuthMorrisPratt(int_list, [192,222,171,33,128]): 
+                fbreak.append(s)
+             int_list = [] 
           
-          dfbreak = [ x-y for (x,y) in zip(fbreak[1:],fbreak[:-1]) ]
-          fbreak = []
+             dfbreak = [ x-y for (x,y) in zip(fbreak[1:],fbreak[:-1]) ]
+             fbreak = []
      
-          fid = open(sonfile,'rb')
-          for i from 0 <= i < len(dfbreak):              
-             tmpdata.append(self._gethead(fid,trans, c)) # get header for packet transWGS84,
-             ints_list = []
-             for j from 0 <= j < dfbreak[i]-headbytes:                 
-                ints_list.append(struct.unpack('>B', ''.join(self._fread(fid,1,'c')) )[0])
-             tmpdata.append(ints_list) # grab the sonar data     
-          dfbreak = [] 
-          data.append(tmpdata)  
-          tmpdata = []   
+             fid = open(sonfile,'rb')
+             for i from 0 <= i < len(dfbreak):
+                tmpdata.append(self._gethead(fid,trans, c, model, humdat['linesize'])) # get header for packet transWGS84,
+                ints_list = []
+                for j from 0 <= j < dfbreak[i]-headbytes: 
+                   ints_list.append(struct.unpack('>B', ''.join(self._fread(fid,1,'c')) )[0])
+                tmpdata.append(ints_list) # grab the sonar data     
+             dfbreak = [] 
+             data.append(tmpdata)  
+             tmpdata = []   
      
-          fid.close()
+             fid.close()
           
        self.data = data
        return
@@ -108,10 +143,10 @@ cdef class pyread:
 
 
     # =========================================================
-    def _calc_beam_pos(self, float dist, float bearing, tuple point):
-
+    cpdef tuple _calc_beam_pos(self, float dist, float bearing, tuple point):
+    #def _calc_beam_pos(self, float dist, float bearing, tuple point):
        cdef float dist_x, dist_y, x_final, y_final
-       dist_x, dist_y = (dist*np.sin(bearing), dist*np.cos(bearing))
+       dist_x, dist_y = (dist*sin(bearing), dist*cos(bearing))
        xfinal, yfinal = (point[0] + dist_x, point[1] + dist_y)
        return (xfinal, yfinal)
 
@@ -149,18 +184,21 @@ cdef class pyread:
              yield startPos
 
     # =========================================================
-    def _fread(self, infile, int num, str typ):
-       dat = arr(typ)
+    cpdef list _fread(self, object infile, int num, str typ):
+    #def _fread(self, object infile, int num, str typ):
+       dat = arr('B')
+       #dat = arr(typ)
        dat.fromfile(infile, num)
        if typ == 'c': #character
-          return(list(dat)) #''.join(dat.tolist())))
+          return(list(dat.tostring())) #''.join(dat.tolist())))
        elif num == 1: # only 1 byte
           return(list(dat))
        else: 
           return(list(dat))
 
     # =========================================================
-    def _gethead(self, fid, trans, float c): #transWGS84,
+    cpdef list _gethead(self, object fid, object trans, float c, int model, int linesize): #transWGS84,
+    #def _gethead(self, object fid, object trans, float c, int model, int linesize): #transWGS84,
        cdef list hd = self._fread(fid, 3, 'B')
        cdef list head=[] #pre-allocate list
        cdef int flag
@@ -194,24 +232,62 @@ cdef class pyread:
        head.append(struct.unpack('>h', ''.join(self._fread(fid,2,'c')) )[0]) # gps1
        head.append(float(struct.unpack('>h', ''.join(self._fread(fid,2,'c')) )[0])/10) # heading_deg    
 
-       spacer = self._fread(fid, 1, 'B')
-       head.append(struct.unpack('>h', ''.join(self._fread(fid,2,'c')) )[0]) # gps2
-       head.append(float(struct.unpack('>h', ''.join(self._fread(fid,2,'c')) )[0])/10) # speed_ms
-       spacer = self._fread(fid, 1, 'B')
-       head.append(float(struct.unpack('>i', ''.join(self._fread(fid,4,'c')) )[0])/10) # depth_m
-       spacer = self._fread(fid, 1, 'B')
-       #%0 (50 or 83 kHz), 1 (200 kHz), 2 (SI Poort), 3 (SI Starboard)
-       head.append(self._fread(fid, 1, 'B')[0]) #beam
-       spacer = self._fread(fid, 1, 'B')
-       head.append(self._fread(fid, 1, 'B')[0]) #voltscale
-       spacer = self._fread(fid, 1, 'B')
-       head.append(struct.unpack('>i', ''.join(self._fread(fid,4,'c')) )[0]/1000) # freq_khz
-       spacer = self._fread(fid, 5, 'B')
-       spacer = self._fread(fid,4,'c')
-       spacer = self._fread(fid, 5, 'B')
-       head.append(struct.unpack('>i', ''.join(self._fread(fid,4,'c')) )[0]) #sentlen
-       spacer = self._fread(fid, 1, 'B')          
+       if model==1199:  
+          spacer = self._fread(fid, 1, 'B')
+          head.append(struct.unpack('>h', ''.join(self._fread(fid,2,'c')) )[0]) # gps2
+          head.append(float(struct.unpack('>h', ''.join(self._fread(fid,2,'c')) )[0])/10) # speed_ms
+          spacer = self._fread(fid, 6, 'B')
+
+          head.append(float(struct.unpack('>i', ''.join(self._fread(fid,4,'c')) )[0])/10) # depth_m
+          spacer = self._fread(fid, 1, 'B')
+           #%0 (50 or 83 kHz), 1 (200 kHz), 2 (SI Poort), 3 (SI Starboard)
+          head.append(self._fread(fid, 1, 'B')[0]) #beam
+          spacer = self._fread(fid, 1, 'B')
+          head.append(self._fread(fid, 1, 'B')[0]) #voltscale
+          spacer = self._fread(fid, 1, 'B')
+          head.append(struct.unpack('>i', ''.join(self._fread(fid,4,'c')) )[0]/1000) # freq_khz
+          spacer = self._fread(fid, 15, 'B')
+          head.append(linesize) #struct.unpack('>i', ''.join(fread(fid,4,'c')) )[0]) #sentlen 2438
        
+       elif model==798:  
+          spacer = self._fread(fid, 1, 'B')
+          head.append(struct.unpack('>h', ''.join(self._fread(fid,2,'c')) )[0]) # gps2
+          head.append(float(struct.unpack('>h', ''.join(self._fread(fid,2,'c')) )[0])/10) # speed_ms
+          spacer = self._fread(fid, 6, 'B')
+          head.append(float(struct.unpack('>i', ''.join(self._fread(fid,4,'c')) )[0])/10) # depth_m
+
+          spacer = self._fread(fid, 1, 'B')  # 50
+          #%0 (50 or 83 kHz), 1 (200 kHz), 2 (SI Poort), 3 (SI Starboard)
+          head.append(self._fread(fid, 1, 'B')[0]) #beam
+          spacer = self._fread(fid, 1, 'B')  
+          head.append(self._fread(fid, 1, 'B')[0]) #voltscale
+          spacer = self._fread(fid, 1, 'B')  # 92
+          head.append(struct.unpack('>i', ''.join(self._fread(fid,4,'c')) )[0]/1000) # freq_khz
+          spacer = self._fread(fid, 1, 'B')   # 53
+          spacer = self._fread(fid, 12,'B') #'c')
+          spacer = self._fread(fid, 1, 'B')    # A0
+          head.append(struct.unpack('>i', ''.join(self._fread(fid,4,'c')) )[0]) #sentlen
+          spacer = self._fread(fid, 1, 'B')   # 21      then data  
+
+       else:
+          spacer = self._fread(fid, 1, 'B')
+          head.append(struct.unpack('>h', ''.join(self._fread(fid,2,'c')) )[0]) # gps2
+          head.append(float(struct.unpack('>h', ''.join(self._fread(fid,2,'c')) )[0])/10) # speed_ms
+          spacer = self._fread(fid, 1, 'B')
+          head.append(float(struct.unpack('>i', ''.join(self._fread(fid,4,'c')) )[0])/10) # depth_m
+          spacer = self._fread(fid, 1, 'B')
+          #%0 (50 or 83 kHz), 1 (200 kHz), 2 (SI Poort), 3 (SI Starboard)
+          head.append(self._fread(fid, 1, 'B')[0]) #beam
+          spacer = self._fread(fid, 1, 'B')
+          head.append(self._fread(fid, 1, 'B')[0]) #voltscale
+          spacer = self._fread(fid, 1, 'B')
+          head.append(struct.unpack('>i', ''.join(self._fread(fid,4,'c')) )[0]/1000) # freq_khz
+          spacer = self._fread(fid, 5, 'B')
+          spacer = self._fread(fid,4,'B') #'c')
+          spacer = self._fread(fid, 5, 'B')
+          head.append(struct.unpack('>i', ''.join(self._fread(fid,4,'c')) )[0]) #sentlen
+          spacer = self._fread(fid, 1, 'B')          
+
        # channel name
        if head[9]==0:
           head.append('down_lowfreq')
@@ -228,34 +304,47 @@ cdef class pyread:
        cdef float dist, bearing
 
        cdef float tvg = ((8.5*10**-5)+(3/76923)+((8.5*10**-5)/4))*c
+       
+       cdef float pi = 3.14159265
         
        if head[9]==3 or head[9]==2: #starboard or port
-          dist = ((np.tan(np.radians(25)))*head[8])-(tvg) #depth
-          bearing = np.radians(head[5]) - (np.pi/2) #heading_deg
-          #x_utm, y_utm = self._calc_beam_pos(dist, bearing, (head[2],head[3]))
-          x_utm = head[2]
-          y_utm = head[3]
-          #lon, lat = transWGS84(x_utm,y_utm, inverse=True)
+          dist = ((tan(25*0.0174532925))*head[8]) + (tvg) #depth
+          bearing = 0.0174532925*head[5] - (pi/2) #heading_deg
+ 
+#          theta = bearing/(180/pi)
+#          #course over ground is given as a compass heading (ENU) from True north, or Magnetic north.
+#          #To get this into NED (North-East-Down) coordinates, you need to rotate the ENU
+#          # (East-North-Up) coordinate frame.
+#          #Subtract pi/2 from your heading
+#          theta = theta - pi/2
+#          # (re-wrap to Pi to -Pi)
+#          theta = np.unwrap(-theta)
+#          bearing = theta * (180/pi)
+ 
+          #bearing = (bearing + 360) % 360
+          bearing = bearing % 360
+                    
+          x_utm, y_utm = self._calc_beam_pos(dist, bearing, (head[2],head[3]))
+          
+          #x_utm = head[2]
+          #y_utm = head[3]
           lat = atan(tan(atan(exp(y_utm/ 6378388.0)) * 2.0 - 1.570796326794897) * 1.0067642927) * 57.295779513082302
           lon = x_utm * 57.295779513082302 / 6378388.0
-           
+
+          #lat = atan(tan(atan(exp(y_utm/ 6378137.0)) * 2.0 - 1.570796326794897) * 1.006705621329495) * 57.295779513082302
+          #lon = x_utm * 57.295779513082302 / 6378137.0          
           head.append(lat)
           head.append(lon)
           lon, lat = trans(lon, lat)
           head.append(lat)
-          head.append(lon)
-
-       #lon, lat = transWGS84(head[2],head[3], inverse=True)
-       #head.append(lat)
-       #head.append(lon)
-       #lon, lat = trans(lon, lat)
-       #head.append(lat)
-       #head.append(lon)       
+          head.append(lon)      
        
        return head
 
+
     # =========================================================
-    def _decode_humdat(self, fid2, trans): #, transWGS84): 
+    cpdef dict _decode_humdat(self, object fid2, object trans): #, transWGS84): 
+    #def _decode_humdat(self, object fid2, object trans): #, transWGS84): 
        """
        returns data from .DAT file
        """
@@ -305,7 +394,8 @@ cdef class pyread:
 
 
     # =========================================================
-    def _getsonar(self, str sonarstring):
+    cpdef list _getsonar(self, str sonarstring):
+    #def _getsonar(self, str sonarstring):    
         """
         returns sonar data
         """
@@ -315,7 +405,8 @@ cdef class pyread:
               return k  
                  
     # =========================================================
-    def _get_scans(self, list scan, int packet):
+    cpdef np.ndarray _get_scans(self, list scan, int packet):
+    #def _get_scans(self, list scan, int packet):    
         """
         returns an individual scan
         """ 
@@ -326,14 +417,16 @@ cdef class pyread:
                    
     # external functions ======================================                        
     # =========================================================
-    def gethumdat(self):
+    cpdef dict gethumdat(self):
+    #def gethumdat(self):    
         """
         returns data in .DAT file
         """  
         return self.humdat
 
     # =========================================================
-    def getportscans(self):
+    cpdef np.ndarray getportscans(self):
+    #def getportscans(self):    
         """
         returns compiled scans
         """       
@@ -348,7 +441,8 @@ cdef class pyread:
         return np.asarray(c_port,'float16').T
 
     # =========================================================
-    def getstarscans(self):
+    cpdef np.ndarray getstarscans(self):
+    #def getstarscans(self):    
         """
         returns compiled scans
         """       
@@ -363,7 +457,8 @@ cdef class pyread:
         return np.asarray(c_star,'float16').T
 
     # =========================================================
-    def getlowscans(self):
+    cpdef np.ndarray getlowscans(self):
+    #def getlowscans(self):    
         """
         returns compiled scans
         """       
@@ -378,7 +473,8 @@ cdef class pyread:
         return np.asarray(c_lo,'float16').T
 
     # =========================================================
-    def gethiscans(self):
+    cpdef np.ndarray gethiscans(self):
+    #def gethiscans(self):    
         """
         returns compiled scans
         """       
@@ -393,7 +489,8 @@ cdef class pyread:
         return np.asarray(c_hi,'float16').T
 
     # =========================================================
-    def getmetadata(self):
+    cpdef dict getmetadata(self):
+    #def getmetadata(self):    
         """
         returns meta data
         """  
@@ -412,6 +509,8 @@ cdef class pyread:
         cdef list dep_m = []
         cdef list e = []
         cdef list n = []
+        cdef list gps1 = []
+        cdef list gps2 = []
         for i in ind:
            lon.append(float(tmp[i-1][15]) )
            lat.append(float(tmp[i-1][14]) )
@@ -421,11 +520,27 @@ cdef class pyread:
            e.append(float(tmp[i-1][17]) )
            n.append(float(tmp[i-1][16]) )
            hdg.append(float(tmp[i-1][5]) )
+           gps1.append(float(tmp[i-1][4]))
+           gps2.append(float(tmp[i-1][6]))
+
+        cdef np.ndarray hdg2 = np.asarray(hdg, 'float')
+        cdef np.ndarray gps_a = np.asarray(gps1, 'float')
+        cdef np.ndarray gps_b = np.asarray(gps2, 'float')
+
+        # remove headings with bad gps flags
+        hdg2[gps_a==0] = np.nan
+        hdg2[gps_b==0] = np.nan  
+
+        try:
+           nans, y= humutils.nan_helper(hdg2)
+           hdg2[nans]= np.interp(y(nans), y(~nans), hdg2[~nans])
+        except:
+           pass
 
         cdef np.ndarray starttime = np.asarray(self.humdat['unix_time'], 'float')
         cdef np.ndarray caltime = np.asarray(starttime + time_s, 'float')
 
-        cdef dict metadict={'lat': np.asarray(lat), 'lon': np.asarray(lon), 'spd': np.asarray(spd), 'time_s': np.asarray(time_s), 'e': np.asarray(e), 'n': np.asarray(n), 'dep_m': np.asarray(dep_m), 'caltime': np.asarray(caltime), 'heading': np.asarray(hdg) }
+        cdef dict metadict={'lat': np.asarray(lat), 'lon': np.asarray(lon), 'spd': np.asarray(spd), 'time_s': np.asarray(time_s), 'e': np.asarray(e), 'n': np.asarray(n), 'dep_m': np.asarray(dep_m), 'caltime': np.asarray(caltime), 'heading': hdg2 }
         return metadict
 
 # cython pyread.pyx

@@ -5,10 +5,9 @@ INFO:
 
 
 Author:    Daniel Buscombe
-           Grand Canyon Monitoring and Research Center
-           United States Geological Survey
-           Flagstaff, AZ 86001
-           dbuscombe@usgs.gov
+           Northern Arizona University
+           Flagstaff, AZ 86011
+           daniel.buscombe@nau.edu
 
 For latest code version please visit:
 https://github.com/dbuscombe-usgs
@@ -18,7 +17,7 @@ This software is in the public domain because it contains materials that origina
 For more information, see the official USGS copyright policy at
 http://www.usgs.gov/visual-id/credit_usgs.html#copyright
 '''
-
+from __future__ import print_function
 from numpy.lib.stride_tricks import as_strided as ast
 import os
 import numpy as np
@@ -74,12 +73,12 @@ def auto_bedpick(ft, dep_m, chunkmode, port_fp, c):
     imu = []
 
     if chunkmode!=4:
-      for k in xrange(len(port_fp)):
+      for k in range(len(port_fp)):
          #imu.append(port_fp[k][int(np.min(bed)):int(np.max(bed)),:])
-         imu.append(port_fp[k][np.max([0,int(np.min(bed))-buff]):int(np.max(bed))+buff,:])
+         imu.append(port_fp[k][np.max([0,int(np.min(bed)-buff)]):int(np.max(bed)+buff),:])
       imu = np.hstack(imu)
     else:
-      imu.append(port_fp[np.max([0,int(np.min(bed))-buff]):int(np.max(bed))+buff,:])
+      imu.append(port_fp[np.max([0,int(np.min(bed)-buff)]):int(np.max(bed)+buff),:])
 
     imu = np.squeeze(np.asarray(imu, 'float64'))-buff
 
@@ -99,7 +98,7 @@ def auto_bedpick(ft, dep_m, chunkmode, port_fp, c):
     dx,dy = np.gradient(imu)
     lap = np.sqrt(dx**2 + dy**2)
     del dx, dy
-    autobed = dpboundary(-lap[buff:,:].T)+buff
+    autobed = dpboundary(-lap[int(buff):,:].T)+int(buff)
     del lap
 
     autobed = np.squeeze(autobed)
@@ -124,7 +123,7 @@ def auto_bedpick(ft, dep_m, chunkmode, port_fp, c):
 
     # if standard deviation of auto bed pick is too small, then use acoustic bed pick
     if np.std(x)<5:
-       print "stdev of auto bed pick is low, using acoustic pick"
+       print("stdev of auto bed pick is low, using acoustic pick")
        x = bed.copy()
 
     return x, bed
@@ -154,7 +153,7 @@ def get_depth(dep_m):
 def get_dist(lat, lon):
 
     dist = np.zeros(len(lat))
-    for k in xrange(len(lat)-1):
+    for k in range(len(lat)-1):
        dist[k] = distBetweenPoints(lat[k], lat[k+1], lon[k], lon[k+1])
 
     return np.cumsum(dist)
@@ -169,7 +168,7 @@ def get_bearing(calc_bearing, filt_bearing, lat, lon, heading): #cog
 
        #point-to-point bearing
        bearing = np.zeros(len(lat))
-       for k in xrange(len(lat)-1):
+       for k in range(len(lat)-1):
           bearing[k] = bearingBetweenPoints(lat[k], lat[k+1], lon[k], lon[k+1])
        #del lat, lon
 
@@ -181,7 +180,7 @@ def get_bearing(calc_bearing, filt_bearing, lat, lon, heading): #cog
 
     # if stdev in heading is large, there's probably noise that needs to be filtered out
     if np.std(bearing)>180:
-       print "WARNING: large heading stdev - attempting filtering"
+       print("WARNING: large heading stdev - attempting filtering")
        from sklearn.cluster import MiniBatchKMeans
        # can have two modes
        data = np.column_stack([bearing, bearing])
@@ -469,12 +468,12 @@ def sliding_window(a,ws,ss = None,flatten = True):
    except:
 
       from itertools import product
-      print "memory error, windowing using slower method"
+      print("memory error, windowing using slower method")
       # For each dimension, create a list of all valid slices
       slices = [[] for i in range(len(ws))]
-      for i in xrange(len(ws)):
+      for i in range(len(ws)):
          nslices = ((shap[i] - ws[i]) // ss[i]) + 1
-         for j in xrange(0,nslices):
+         for j in range(0,nslices):
             start = j * ss[i]
             stop = start + ws[i]
             slices[i].append(slice(start,stop))
@@ -568,7 +567,7 @@ def dpboundary(imu):
    p = np.zeros((m,n))
    c[0,:] = imu[0,:]
 
-   for i in xrange(1,m):
+   for i in range(1,m):
       c0 = c[i-1,:]
       tmp1 = np.squeeze(ascol(np.hstack((c0[1:],c0[-1]))))
       tmp2 = np.squeeze(ascol(np.hstack((c0[0], c0[0:len(c0)-1]))))
@@ -664,7 +663,7 @@ def gearth_fig(llcrnrlon, llcrnrlat, urcrnrlon, urcrnrlat, pixels=1024):
         plt.ioff()  # Make `True` to prevent the KML components from poping-up.
     fig = plt.figure(figsize=figsize,
                      frameon=False,
-                     dpi=pixels//10)
+                     dpi=600) #pixels//5) #10)
     # KML friendly image.  If using basemap try: `fix_aspect=False`.
     ax = fig.add_axes([0, 0, 1, 1])
     ax.set_xlim(llcrnrlon, urcrnrlon)
@@ -679,7 +678,7 @@ def make_kml(llcrnrlon, llcrnrlat, urcrnrlon, urcrnrlat,
     and several simplekml kw..."""
 
     kml = Kml()
-    altitude = kw.pop('altitude', 2e7)
+    altitude = kw.pop('altitude', 1e0) #2e7)
     roll = kw.pop('roll', 0)
     tilt = kw.pop('tilt', 0)
     altitudemode = kw.pop('altitudemode', AltitudeMode.relativetoground)
@@ -696,8 +695,9 @@ def make_kml(llcrnrlon, llcrnrlat, urcrnrlon, urcrnrlat,
         ground.draworder = draworder
         ground.visibility = kw.pop('visibility', 1)
         ground.name = kw.pop('name', 'overlay')
-        ground.color = kw.pop('color', '9effffff')
-        ground.atomauthor = kw.pop('author', 'ocefpaf')
+        #ground.color = kw.pop('color', '9effffff') ##kw.pop('color', '9effffff')
+        
+        ground.atomauthor = kw.pop('author', 'PyHum')
         ground.latlonbox.rotation = kw.pop('rotation', 0)
         ground.description = kw.pop('description', 'Matplotlib figure')
         ground.gxaltitudemode = kw.pop('gxaltitudemode',

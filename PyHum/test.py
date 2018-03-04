@@ -35,11 +35,8 @@
 #|b|y| |D|a|n|i|e|l| |B|u|s|c|o|m|b|e|
 #+-+-+ +-+-+-+-+-+-+ +-+-+-+-+-+-+-+-+
 #+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-#|d|b|u|s|c|o|m|b|e|@|u|s|g|s|.|g|o|v|
+#|d|a|n|i|e|l|.|b|u|s|c|o|m|b|e|@|n|a|u|.|e|d|u|
 #+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-#+-+-+-+-+ +-+-+-+-+-+-+-+-+-+-+ +-+-+-+-+-+-+
-#|U|.|S|.| |G|e|o|l|o|g|i|c|a|l| |S|u|r|v|e|y|
-#+-+-+-+-+ +-+-+-+-+-+-+-+-+-+-+ +-+-+-+-+-+-+
 
 #"""
 
@@ -97,6 +94,7 @@ def dotest():
    ph = 7.0 # acidity on the pH scale
    temp = 10.0 # water temperature in degrees Celsius
    salinity = 0.0
+   dconcfile = None
 
    # for shadow removal
    shadowmask = 0 # 0= automatic shadow removal, 1=manual
@@ -122,6 +120,7 @@ def dotest():
    #mode = 3 # gridding mode (gaussian weighted nearest neighbour)
    use_uncorrected = 0
 
+   scalemax=40
    nn = 64 #number of nearest neighbours for gridding (used if mode > 1)
    ##influence = 1 #Radius of influence used in gridding. Cut off distance in meters 
    numstdevs = 5 #Threshold number of standard deviations in sidescan intensity per grid cell up to which to accept 
@@ -136,13 +135,33 @@ def dotest():
    PyHum.read(humfile, sonpath, cs2cs_args, c, draft, doplot, t, bedpick, flip_lr, model, calc_bearing, filt_bearing, chunk) #cog
 
    ## correct scans and remove water column
-   PyHum.correct(humfile, sonpath, maxW, doplot, dofilt, correct_withwater, ph, temp, salinity)
+   PyHum.correct(humfile, sonpath, maxW, doplot, dofilt, correct_withwater, ph, temp, salinity, dconcfile)
 
    ## remove acoustic shadows (caused by distal acoustic attenuation or sound hitting shallows or shoreline)
    PyHum.rmshadows(humfile, sonpath, win, shadowmask, doplot, dissim, correl, contrast, energy, mn)
 
    win = 10
    PyHum.texture2(humfile, sonpath, win, doplot, numclasses)
+
+   ## grid and map the scans
+   PyHum.map(humfile, sonpath, cs2cs_args, res, mode, nn, numstdevs, use_uncorrected, scalemax) 
+
+   ## calculate and map the e1 and e2 acoustic coefficients from the downward-looking sonar
+   PyHum.e1e2(humfile, sonpath, cs2cs_args, ph, temp, salinity, beam, transfreq, integ, numclusters, doplot)
+   
+   res = 1 # grid resolution in metres
+   numstdevs = 5
+   
+   ## grid and map the texture lengthscale maps
+   #PyHum.map_texture(humfile, sonpath, cs2cs_args, res, mode, nn, numstdevs)
+
+   #res = 0
+   #nn = 5 # noise threshold in dB W
+   #noisefloor = 10 # noise threshold in dB W
+   #weight = 1 ##based on grazing angle and inverse distance weighting
+   
+   ## create mosaic out of all chunks with weighting according to distance from nadir, grazing angle, or both
+   #PyHum.mosaic(humfile, sonpath, cs2cs_args, res, nn, noisefloor, weight)
 
    ##win = 200 #100 # pixel window 
    ## Calculate texture lengthscale maps using the method of Buscombe et al. (2015)
@@ -151,26 +170,6 @@ def dotest():
    ## Calculate texture lengthscale maps using the method of Buscombe et al. (2015)
    ## implemented using the superpixel approach
    ##PyHum.texture_slic(humfile, sonpath, doplot, numclasses, maxscale, notes)
-
-   ## grid and map the scans
-   PyHum.map(humfile, sonpath, cs2cs_args, res, mode, nn, numstdevs, use_uncorrected) #dowrite, 
-
-   res = 1 # grid resolution in metres
-   numstdevs = 5
-   
-   ## grid and map the texture lengthscale maps
-   PyHum.map_texture(humfile, sonpath, cs2cs_args, res, mode, nn, numstdevs)
-
-   ## calculate and map the e1 and e2 acoustic coefficients from the downward-looking sonar
-   PyHum.e1e2(humfile, sonpath, cs2cs_args, ph, temp, salinity, beam, transfreq, integ, numclusters, doplot)
-   
-   #res = 0
-   #nn = 5 # noise threshold in dB W
-   #noisefloor = 10 # noise threshold in dB W
-   #weight = 1 ##based on grazing angle and inverse distance weighting
-   
-   ## create mosaic out of all chunks with weighting according to distance from nadir, grazing angle, or both
-   #PyHum.mosaic(humfile, sonpath, cs2cs_args, res, nn, noisefloor, weight)
 
 if __name__ == '__main__':
    dotest()

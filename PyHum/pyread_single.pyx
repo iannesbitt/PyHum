@@ -8,11 +8,9 @@ INFO:
 
 
 Author:    Daniel Buscombe
-           Grand Canyon Monitoring and Research Center
-           United States Geological Survey
-           Flagstaff, AZ 86001
-           dbuscombe@usgs.gov
-Version: xxx      Revision: Jan, 2015
+           Northern Arizona University
+           Flagstaff, AZ 86011
+           daniel.buscombe@nau.edu
 
 For latest code version please visit:
 https://github.com/dbuscombe-usgs
@@ -61,15 +59,24 @@ cdef class pyread:
           trans =  pyproj.Proj(cs2cs_args1.lstrip(), inverse=True)       
 
        fid2 = open(humfile,'rb')
-       humdat = self._decode_humdat(fid2, trans) #, transWGS84)
+       if model==0: #'onix':
+          humdat = self._decode_onix(fid2)
+       else:
+          humdat = self._decode_humdat(fid2, trans) #, transWGS84)
        self.humdat = humdat
 
-       if int(humdat['sonar_name'])==301:
-          model = 1199
+       #if int(humdat['sonar_name'])==301:
+       #   model = 1199
 
        if model==798:
           headbytes=72
        elif model==1199:
+          headbytes=68
+       elif model==0: ##onix
+          headbytes=68
+       elif model==1: ##helix
+          headbytes=68
+       elif model==2: ##mega
           headbytes=68
        else: #tested so far 998, 1198, 898
           headbytes=67
@@ -193,10 +200,11 @@ cdef class pyread:
     # =========================================================
     cpdef list _fread(self, object infile, int num, str typ):
     #def _fread(self, object infile, int num, str typ):
-       dat = arr(typ)
+       dat = arr('B')
+       #dat = arr(typ)	   
        dat.fromfile(infile, num)
        if typ == 'c': #character
-          return(list(dat)) #''.join(dat.tolist())))
+          return(list(dat.tostring())) #''.join(dat.tolist())))
        elif num == 1: # only 1 byte
           return(list(dat))
        else: 
@@ -238,7 +246,7 @@ cdef class pyread:
        head.append(struct.unpack('>h', ''.join(self._fread(fid,2,'c')) )[0]) # gps1
        head.append(float(struct.unpack('>h', ''.join(self._fread(fid,2,'c')) )[0])/10) # heading_deg    
 
-       if model==1199:  
+       if model==1199 or model==0 or model==1 or model==2: #onix, helix, mega  
           spacer = self._fread(fid, 1, 'B')
           head.append(struct.unpack('>h', ''.join(self._fread(fid,2,'c')) )[0]) # gps2
           head.append(float(struct.unpack('>h', ''.join(self._fread(fid,2,'c')) )[0])/10) # speed_ms
@@ -270,7 +278,7 @@ cdef class pyread:
           spacer = self._fread(fid, 1, 'B')  # 92
           head.append(struct.unpack('>i', ''.join(self._fread(fid,4,'c')) )[0]/1000) # freq_khz
           spacer = self._fread(fid, 1, 'B')   # 53
-          spacer = self._fread(fid, 12,'c')
+          spacer = self._fread(fid, 12,'B') #'c')
           spacer = self._fread(fid, 1, 'B')    # A0
           head.append(struct.unpack('>i', ''.join(self._fread(fid,4,'c')) )[0]) #sentlen
           spacer = self._fread(fid, 1, 'B')   # 21      then data  
@@ -289,7 +297,7 @@ cdef class pyread:
           spacer = self._fread(fid, 1, 'B')
           head.append(struct.unpack('>i', ''.join(self._fread(fid,4,'c')) )[0]/1000) # freq_khz
           spacer = self._fread(fid, 5, 'B')
-          spacer = self._fread(fid,4,'c')
+          spacer = self._fread(fid,4,'B') #'c')
           spacer = self._fread(fid, 5, 'B')
           head.append(struct.unpack('>i', ''.join(self._fread(fid,4,'c')) )[0]) #sentlen
           spacer = self._fread(fid, 1, 'B')          
@@ -303,6 +311,8 @@ cdef class pyread:
           head.append('sidescan_port')
        elif head[9]==3:
           head.append('sidescan_starboard')
+       elif head[9]==4:
+          head.append('down_vhighfreq')
        else:
           head.append('unknown')
 
@@ -348,6 +358,34 @@ cdef class pyread:
        
        return head
 
+
+    # =========================================================
+    cpdef dict _decode_onix(self, object fid2):
+       """
+       returns data from .DAT file
+       """
+
+       dumpstr = fid2.read()
+       fid2.close()
+
+       humdat = {}
+       hd = dumpstr.split('<')[0]
+       tmp = ''.join(dumpstr.split('<')[1:])
+       humdat['NumberOfPings'] = int(tmp.split('NumberOfPings=')[1].split('>')[0])
+       humdat['TotalTimeMs'] = int(tmp.split('TotalTimeMs=')[1].split('>')[0])
+       humdat['linesize'] = int(tmp.split('PingSizeBytes=')[1].split('>')[0])
+       humdat['FirstPingPeriodMs'] = int(tmp.split('FirstPingPeriodMs=')[1].split('>')[0])
+       humdat['BeamMask'] = int(tmp.split('BeamMask=')[1].split('>')[0])
+       humdat['Chirp1StartFrequency'] = int(tmp.split('Chirp1StartFrequency=')[1].split('>')[0])
+       humdat['Chirp1EndFrequency'] = int(tmp.split('Chirp1EndFrequency=')[1].split('>')[0])
+       humdat['Chirp2StartFrequency'] = int(tmp.split('Chirp2StartFrequency=')[1].split('>')[0])
+       humdat['Chirp2EndFrequency'] = int(tmp.split('Chirp2EndFrequency=')[1].split('>')[0])
+       humdat['Chirp3StartFrequency'] = int(tmp.split('Chirp3StartFrequency=')[1].split('>')[0])
+       humdat['Chirp3EndFrequency'] = int(tmp.split('Chirp3EndFrequency=')[1].split('>')[0])
+       humdat['SourceDeviceModelId2D'] = int(tmp.split('SourceDeviceModelId2D=')[1].split('>')[0])
+       humdat['SourceDeviceModelIdSI'] = int(tmp.split('SourceDeviceModelIdSI=')[1].split('>')[0])
+       humdat['SourceDeviceModelIdDI'] = int(tmp.split('SourceDeviceModelIdDI=')[1].split('>')[0])
+       return humdat
 
     # =========================================================
     cpdef dict _decode_humdat(self, object fid2, object trans): #, transWGS84): 
@@ -451,6 +489,9 @@ cdef class pyread:
         if not scan:
            scan = self._getsonar('down_highfreq')           
            sonarstring = 'down_highfreq'                     
+        if not scan:
+           scan = self._getsonar('down_vhighfreq')           
+           sonarstring = 'down_vhighfreq' 
         
         cdef int packet = scan[0][12]
         cdef list ind = range(0,len(scan))
@@ -512,8 +553,12 @@ cdef class pyread:
         except:
            pass
 
-        cdef np.ndarray starttime = np.asarray(self.humdat['unix_time'], 'float')
-        cdef np.ndarray caltime = np.asarray(starttime + time_s, 'float')
+        try:
+           starttime = np.asarray(self.humdat['unix_time'], 'float') #cdef np.ndarray 
+           caltime = np.asarray(starttime + time_s, 'float') #cdef np.ndarray 
+        except:
+           starttime = 0
+           caltime = 0
 
         cdef dict metadict={'lat': np.asarray(lat), 'lon': np.asarray(lon), 'spd': np.asarray(spd), 'time_s': np.asarray(time_s), 'e': np.asarray(e), 'n': np.asarray(n), 'dep_m': np.asarray(dep_m), 'caltime': np.asarray(caltime), 'heading': hdg2 }
         return metadict
